@@ -1,0 +1,520 @@
+1.	Pod and ReplicaSet
+
+kubectl run nginx --image=nginx
+
+kubectl get pods -o wide
+kubectl get nodes
+kubectl get events
+kubectl describe pods
+
+vi rs-nginx.yaml
+# Paste the following 
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rs-nginx
+  labels:
+    app: nginx
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - containerPort: 80
+
+After pasting	
+Esc
+Shift+:
+wq!
+kubectl apply -f rs-nginx.yaml
+
+kubectl scale --replicas=1 -f rs-nginx.yaml
+kubectl get rs
+kubectl delete pods 
+
+-------------------------------------------------------------------------------------------------------------------------------------------
+2.	Services
+
+2.1
+kubectl expose deployment rs-nginx --name=clutserip --type=ClusterIP
+kubectl scale --replicas=2 -f rs-nginx.yaml
+kubectl get svc 
+kubectl delete svc clutserip
+
+2.2
+kubectl expose deployment rs-nginx --name=nodeport --type=NodePort
+kubectl scale --replicas=2 -f rs-nginx.yaml
+kubectl get svc
+kubectl delete svc nodeport
+
+2.3
+kubectl expose deployment rs-nginx --name=loadbalancer --type=LoadBalancer
+kubectl get svc
+kubectl delete svc loadbalancer
+
+Services
+kubectl expose deployment rs-nginx --name=clutserip --type=ClusterIP
+kubectl expose deployment rs-nginx --name=nodeport --type=NodePort
+kubectl expose deployment rs-nginx --name=loadbalancer --type=LoadBalancer
+
+-------------------------------------------------------------------------------------------------------------------------------------------------
+3.	Volume
+
+Create yaml file 
+
+#pv.yaml
+
+==============
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: efs-pv
+spec:
+  capacity:
+    storage: 5Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ""
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: fs-022fab2166b242859
+...
+==============(fs-022fab2166b242859)
+
+kubectl apply -f pv.yml 
+
+kubectl get pv efs-pv
+
+=============
+now create PVC yaml file
+
+#pvc.yaml
+
+================
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: efs-claim
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 5Gi
+...
+
+==================
+kubectl apply -f pvc.yaml
+
+kubectl get pv efs-pv
+
+kubectl get pvc efs-claim
+
+==============
+Now POD level comfiguration create a pod yaml file
+
+
+#pod.yaml
+
+============
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: efs-app
+spec:
+  containers:
+  - name: app
+    image: centos
+    command: ["/bin/sh"]
+    args: ["-c", "while true; do echo $(date -u) >> /data/out.txt; sleep 2; done"]
+    volumeMounts:
+    - name: persistent-storage
+      mountPath: /data
+  volumes:
+  - name: persistent-storage
+    persistentVolumeClaim:
+      claimName: efs-claim
+...
+===============
+
+kubectl apply -f pod.yaml
+
+kubectl exec -ti efs-app -- tail -f /data/out.txt
+
+
+=========================
+
+4. Config Maps
+
+
+1Create ConfigMap from files in a directory
+
+mkdir -p configure-pod-container/configmap
+wget https://kubernetes.io/examples/configmap/game.properties -O configure-pod-container/configmap/game.properties
+wget https://kubernetes.io/examples/configmap/ui.properties -O configure-pod-container/configmap/ui.properties
+
+kubectl create configmap game-config --from-file=configure-pod-container/configmap
+kubectl describe configmaps game-config
+
+kubectl get configmaps game-config -o yaml
+
+2Create ConfigMap from individual files
+
+kubectl create configmap game-config-2 --from-file=configure-pod-container/configmap/game.properties
+kubectl describe configmaps game-config-2
+
+
+3 Create ConfigMap from env files
+
+wget https://kubernetes.io/examples/configmap/game-env-file.properties -O configure-pod-container/configmap/game-env-file.properties
+wget https://kubernetes.io/examples/configmap/ui-env-file.properties -O configure-pod-container/configmap/ui-env-file.properties
+
+cat configure-pod-container/configmap/game-env-file.properties
+
+kubectl create configmap game-config-env-file \
+       --from-env-file=configure-pod-container/configmap/game-env-file.properties
+kubectl get configmap game-config-env-file -o yaml
+
+kubectl create configmap config-multi-env-files \
+        --from-env-file=configure-pod-container/configmap/game-env-file.properties \
+        --from-env-file=configure-pod-container/configmap/ui-env-file.properties
+
+kubectl get configmap config-multi-env-files -o yaml
+
+4Define the key to use when creating a ConfigMap from a file
+
+kubectl create configmap game-config-3 --from-file=game-special-key=configure-pod-container/configmap/game.properties
+kubectl get configmaps game-config-3 -o yaml
+
+5Create ConfigMaps from literal values
+
+kubectl create configmap special-config --from-literal=special.how=very --from-literal=special.type=charm
+kubectl get configmaps special-config -o yaml
+
+6.Define a container environment variable with data from a single ConfigMap
+
+kubectl create configmap special-config --from-literal=special.how=very
+kubectl get configmaps special-config -o yaml
+
+vi pod-single-configmap-env-variable.yaml
+
+apiVersion: v1   
+kind: Pod   
+metadata:   
+  name: dapi-test-pod   
+spec:   
+  containers:   
+    - name: test-container   
+      image: registry.k8s.io/busybox   
+      command: [ "/bin/sh", "-c", "env" ]   
+      env:   
+        # Define the environment variable   
+        - name: SPECIAL_LEVEL_KEY   
+          valueFrom:   
+            configMapKeyRef:   
+              # The ConfigMap containing the value you want to assign to SPECIAL_LEVEL_KEY   
+              name: special-config   
+              # Specify the key associated with the value   
+              key: special.how   
+  restartPolicy: Never
+   
+kubectl create -f pod-single-configmap-env-variable.yaml
+
+kubectl logs -f dapi-test-pod
+
+7.Define container environment variables with data from multiple ConfigMaps
+
+kubectl create -f https://kubernetes.io/examples/configmap/configmaps.yaml
+kubectl create -f https://kubernetes.io/examples/pods/pod-multiple-configmap-env-variable.yaml
+
+kubectl logs -f dapi-test-pod
+
+8 Populate a Volume with data stored in a ConfigMap
+  
+
+vi multiple.yaml
+# Paste the following 
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: special-config
+  namespace: default
+data:
+  special.how: very
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: env-config
+  namespace: default
+data:
+  log_level: INFO
+
+Esc , shift+:, wq!
+
+kubectl apply -f multiple.yaml
+
+vi configmap-multikeys.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: special-config
+  namespace: default
+data:
+  SPECIAL_LEVEL: very
+  SPECIAL_TYPE: charm
+
+             
+  
+kubectl apply -f configmap-multikeys.yaml
+
+
+vi pod-configmap-volume.yaml
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dapi-test-pod
+spec:
+  containers:
+    - name: test-container
+      image: registry.k8s.io/busybox
+      command: [ "/bin/sh", "-c", "ls /etc/config/" ]
+      volumeMounts:
+      - name: config-volume
+        mountPath: /etc/config
+  volumes:
+    - name: config-volume
+      configMap:
+        # Provide the name of the ConfigMap containing the files you want
+        # to add to the container
+        name: special-config
+  restartPolicy: Never
+  
+  
+kubectl apply -f pod-configmap-volume.yaml
+
+kubectl logs -f dapi-test-pod
+
+
+vi pod-configmap-volume-specific-key.yaml 
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dapi-test-pod
+spec:
+  containers:
+    - name: test-container
+      image: registry.k8s.io/busybox
+      command: [ "/bin/sh","-c","cat /etc/config/keys" ]
+      volumeMounts:
+      - name: config-volume
+        mountPath: /etc/config
+  volumes:
+    - name: config-volume
+      configMap:
+        name: special-config
+        items:
+        - key: SPECIAL_LEVEL
+          path: keys
+  restartPolicy: Never
+
+
+  
+kubectl apply -f pod-configmap-volume-specific-key.yaml 
+
+kubectl logs -f dapi-test-pod
+
+9. Add ConfigMap data to a specific path in the Volume
+
+kubectl create -f https://kubernetes.io/examples/pods/pod-configmap-volume-specific-key.yaml
+
+kubectl logs -f dapi-test-pod
+
+===============
+5. Secrets
+
+create secret using kubectl create command
+echo -n 'my-proj' > ./username.txt
+echo -n '2978$vdg7Jb' > ./password.txt
+
+kubectl create secret generic test-secret \
+  --from-file=./username.txt \
+  --from-file=./password.txt
+  
+  
+kubectl create secret generic test-secret-1 --from-literal='username=my-app' --from-literal='password=39528$vdg7Jb'
+  
+kubectl get secret
+
+
+
+Create a secret manually:
+
+echo -n 'my-app' | base64
+echo -n '39528$vdg7Jb' | base64
+
+
+vi secret.yaml
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysecret
+type: Opaque
+data:
+  username: bXktYXBw
+  password: Mzk1MjgkdmRnN0pi
+  
+kubectl create -f   secret.yaml
+
+Decoding a Secret
+
+kubectl get secret test-secret -o jsonpath='{.data.*}' | base64 -di
+kubectl get secret test-secret-1 -o jsonpath='{.data.*}' | base64 -di
+kubectl get secret mysecret -o jsonpath='{.data.*}' | base64 -di
+
+Using Secrets as Files from a Pod
+
+vi test-pod.yaml
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secret-test-pod
+spec:
+  containers:
+    - name: test-container
+      image: nginx
+      volumeMounts:
+        # name must match the volume name below
+        - name: secret-volume
+          mountPath: /etc/secret-volume
+  # The secret data is exposed to Containers in the Pod through a Volume.
+  volumes:
+    - name: secret-volume
+      secret:
+        secretName: test-secret
+
+kubectl apply -f test-pod.yaml
+kubectl exec -i -t secret-test-pod -- /bin/bash
+ls /etc/secret-volume
+echo "$(cat /etc/secret-volume/username.txt)"
+echo "$(cat /etc/secret-volume/password.txt)"
+exit
+
+Using Secrets as Environment Variables
+
+vi test-env.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secret-env-pod
+spec:
+  containers:
+  - name: mycontainer
+    image: redis
+    env:
+      - name: SECRET_USERNAME
+        valueFrom:
+          secretKeyRef:
+            name: mysecret
+            key: username
+            optional: false 
+      - name: SECRET_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: mysecret
+            key: password
+            optional: false 
+  restartPolicy: Never
+
+kubectl apply -f test-env.yaml
+kubectl exec -i -t secret-env-pod -- /bin/sh -c 'echo $SECRET_USERNAME'
+kubectl exec -i -t secret-env-pod -- /bin/sh -c 'echo $SECRET_PASSWORD'
+
+=====================
+6. Deployments
+
+6.	Creating a Deployment
+
+vi nginx-deploy.yaml
+# Paste the following 
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 2 
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - containerPort: 80
+
+# after pasting 
+esc  
+Shift+:  
+ wq!
+
+kubectl apply -f nginx-deploy.yaml
+kubectl get deployment
+kubectl scale deployment nginx-deployment –-replicas=3
+kubectl get rs
+kubectl expose deployment nginx-deployment --name=nginx-svc --port=80 --target-port=80 --type=LoadBalancer
+kubectl get svc
+
+--------------------------------------------------------------------------------------------------------------------------------------
+7.	Updating/Rolling back a Deployment (45 mins)
+
+kubectl set image deployment.v1.apps/nginx-deployment nginx=nginx:1.15.11
+
+kubectl rollout status deployment/nginx-deployment
+kubectl get rs
+kubectl describe deploy nginx-deployment
+
+kubectl set image deployment.v1.apps/nginx-deployment nginx=nginx:1.14.2
+
+kubectl annotate deployment/nginx-deployment Kubernetes.io/change-cause='image is updated'
+
+kubectl rollout history deployment/nginx-deployment
+
+kubectl rollout undo deployment/nginx-deployment
+
+kubectl rollout pause deployment/nginx-deployment
+
+kubectl set image deployment.v1.apps/nginx-deployment nginx=nginx:1.16.1
+
+kubectl rollout history deployment/nginx-deployment
+
+kubectl rollout resume deployment/nginx-deployment
+
+------------------------------------------------------------------------------------------------------------------------------------------
